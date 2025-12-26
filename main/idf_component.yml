@@ -16,3 +16,4 @@ dependencies:
   #   public: true
   espressif/esp_h264: '*'
   espressif/esp32_display_panel: '*'
+  espressif/esp_lcd_touch_gt911: '*'
