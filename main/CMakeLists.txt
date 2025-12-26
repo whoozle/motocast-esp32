@@ -1,3 +1,5 @@
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 file(GLOB_RECURSE srcs "main.c" "src/*.c")
 
 idf_component_register(SRCS "${srcs}"
