@@ -29,6 +29,9 @@
 #include "esp_lcd_panel_rgb.h"
 #include "driver/i2c.h"
 
+#include "esp_h264_dec.h"
+#include "esp_h264_dec_sw.h"
+
 #define PROFILE_NUM 2
 #define HEART_PROFILE_APP_ID 0
 #define AUTO_IO_PROFILE_APP_ID 1
@@ -502,7 +505,6 @@ void app_main(void)
     // Install I2C driver
     ESP_ERROR_CHECK(i2c_driver_install(I2C_MASTER_NUM, i2c_conf.mode, 0, 0, 0));
 
-//    display_init();
     esp_lcd_panel_handle_t panel_handle = NULL;
     esp_lcd_rgb_panel_config_t panel_config = {
         .clk_src = LCD_CLK_SRC_DEFAULT, // Set the clock source for the panel
@@ -562,6 +564,13 @@ void app_main(void)
     ESP_ERROR_CHECK_WITHOUT_ABORT(esp_lcd_panel_draw_bitmap(panel_handle, 32, 32, 48, 48, pixels));
 
     wavesahre_rgb_lcd_bl_on();
+
+    esp_h264_dec_cfg_sw_t h264_config = {
+        .pic_type = ESP_H264_RAW_FMT_I420
+    };
+    esp_h264_dec_handle_t h264_handle = NULL;
+    ESP_ERROR_CHECK(esp_h264_dec_sw_new(&h264_config, &h264_handle));
+    ESP_ERROR_CHECK(esp_h264_dec_open(h264_handle));
 
     ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
 
