@@ -1,6 +1,6 @@
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-file(GLOB_RECURSE srcs "main.c" "src/*.c")
+set(srcs main.c src/board.c src/heart_rate_mock.c)
 
 idf_component_register(SRCS "${srcs}"
                        INCLUDE_DIRS "./include")
