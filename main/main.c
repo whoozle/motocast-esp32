@@ -24,6 +24,7 @@
 #include "heart_rate.h"
 
 #include "driver/gpio.h"
+#include "driver/i2c_master.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_rgb.h"
 #include "driver/i2c.h"
@@ -475,6 +476,31 @@ void app_main(void)
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
+
+    gpio_config_t io_conf = {};
+
+    // Disable interrupt
+    io_conf.intr_type = GPIO_INTR_DISABLE;
+    // Bit mask of the pins, use GPIO4 here
+    io_conf.pin_bit_mask = 1ULL << 4;
+    // Set as input mode
+    io_conf.mode = GPIO_MODE_OUTPUT;
+    ESP_ERROR_CHECK(gpio_config(&io_conf));
+
+    i2c_config_t i2c_conf = {
+        .mode = I2C_MODE_MASTER,
+        .sda_io_num = 8,
+        .scl_io_num = 9,
+        .sda_pullup_en = GPIO_PULLUP_ENABLE,
+        .scl_pullup_en = GPIO_PULLUP_ENABLE,
+        .master.clk_speed = 400000,
+    };
+
+    // Configure I2C parameters
+    i2c_param_config(I2C_MASTER_NUM, &i2c_conf);
+
+    // Install I2C driver
+    ESP_ERROR_CHECK(i2c_driver_install(I2C_MASTER_NUM, i2c_conf.mode, 0, 0, 0));
 
 //    display_init();
     esp_lcd_panel_handle_t panel_handle = NULL;
