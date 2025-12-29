@@ -8,7 +8,7 @@
 #include "esp_log.h"
 #include "nvs_flash.h"
 
-#define TAG "BLE_MAX_MTU"
+#define TAG "MAIN"
 #define DEVICE_NAME "Motocast"
 #define GATTS_SERVICE_UUID   0x00FF
 #define GATTS_CHAR_UUID      0xFF01
@@ -172,8 +172,8 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
             
         case ESP_GATTS_WRITE_EVT:
             if (!param->write.is_prep){
-                ESP_LOGI(TAG, "value len %d, value ", param->write.len);
-                ESP_LOG_BUFFER_HEX(TAG, param->write.value, param->write.len);
+                ESP_LOGI(TAG, "accepting %u bytes, no prep ", param->write.len);
+                // ESP_LOG_BUFFER_HEX(TAG, param->write.value, param->write.len);
 #if 0
                 if (gl_profile_tab[PROFILE_B_APP_ID].descr_handle == param->write.handle && param->write.len == 2*/){
                     uint16_t descr_value= param->write.value[1]<<8 | param->write.value[0];
@@ -262,11 +262,11 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
 
         case ESP_GATTS_EXEC_WRITE_EVT:
             ESP_LOGI(TAG, "ESP_GATTS_EXEC_WRITE_EVT");
-            esp_ble_gatts_send_response(gatts_if, param->write.conn_id, param->write.trans_id, ESP_GATT_OK, NULL);
             if (param->exec_write.exec_write_flag == ESP_GATT_PREP_WRITE_EXEC){
-                ESP_LOG_BUFFER_HEX(TAG, prepare_write_env.prepare_buf, prepare_write_env.prepare_len);
-            }else{
-                ESP_LOGI(TAG,"Prepare write cancel");
+                // ESP_LOG_BUFFER_HEX(TAG, prepare_write_env.prepare_buf, prepare_write_env.prepare_len);
+                ESP_LOGI(TAG, "accepting %u bytes of data", prepare_write_env.prepare_len);
+            } else{
+                ESP_LOGI(TAG,"ESP_GATT_PREP_WRITE_CANCEL");
             }
             if (prepare_write_env.prepare_buf) {
                 free(prepare_write_env.prepare_buf);
