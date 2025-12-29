@@ -6,6 +6,7 @@
 #include "esp_bt_main.h"
 #include "esp_gatt_common_api.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "nvs_flash.h"
 
 #define TAG "MAIN"
@@ -16,22 +17,27 @@
 
 // Maximum MTU size (ESP32 supports up to 517 bytes)
 #define MAX_MTU_SIZE 517
-#define PREFERRED_MTU 512
+#define PREFERRED_MTU 517  // Request maximum MTU
 
 static uint8_t adv_config_done = 0;
 #define ADV_CONFIG_FLAG (1 << 0)
 #define SCAN_RSP_CONFIG_FLAG (1 << 1)
 
-#define PREPARE_BUF_MAX_SIZE (1024)
+#define PREPARE_BUF_MAX_SIZE (4096)  // Increased buffer size
 
 static uint16_t gatts_if_id = 0;
 static uint16_t conn_id = 0;
 static uint16_t gatts_handle = 0;
-static uint16_t current_mtu = 23; // Default MTU
+static uint16_t current_mtu = 23;
 
+// Throughput monitoring
+static uint32_t bytes_received = 0;
+static int64_t last_report_time = 0;
+
+// Optimized advertising parameters for faster connection
 static esp_ble_adv_params_t adv_params = {
-    .adv_int_min = 0x20,
-    .adv_int_max = 0x40,
+    .adv_int_min = 0x20,        // 20ms
+    .adv_int_max = 0x40,        // 40ms
     .adv_type = ADV_TYPE_IND,
     .own_addr_type = BLE_ADDR_TYPE_PUBLIC,
     .channel_map = ADV_CHNL_ALL,
@@ -50,11 +56,11 @@ static esp_ble_adv_data_t adv_config = {
     .set_scan_rsp = false,
     .include_name = true,
     .include_txpower = true,
-    .min_interval = 0x0006, //slave connection min interval, Time = min_interval * 1.25 msec
-    .max_interval = 0x000C, //slave connection max interval, Time = max_interval * 1.25 msec
+    .min_interval = 0x0006,
+    .max_interval = 0x0006,  // Set both to same value for consistent interval
     .appearance = 0x00,
-    .manufacturer_len = 0, //TEST_MANUFACTURER_DATA_LEN,
-    .p_manufacturer_data =  NULL, //&test_manufacturer[0],
+    .manufacturer_len = 0,
+    .p_manufacturer_data = NULL,
     .service_data_len = 0,
     .p_service_data = NULL,
     .service_uuid_len = 32,
@@ -67,10 +73,10 @@ static esp_ble_adv_data_t scan_rsp_config = {
     .include_name = true,
     .include_txpower = true,
     .min_interval = 0x0006,
-    .max_interval = 0x000C,
+    .max_interval = 0x0006,
     .appearance = 0x00,
-    .manufacturer_len = 0, //TEST_MANUFACTURER_DATA_LEN,
-    .p_manufacturer_data =  NULL, //&test_manufacturer[0],
+    .manufacturer_len = 0,
+    .p_manufacturer_data = NULL,
     .service_data_len = 0,
     .p_service_data = NULL,
     .service_uuid_len = 32,
@@ -111,15 +117,31 @@ static const esp_gatts_attr_db_t gatt_db[GATTS_NUM_HANDLE] = {
 };
 
 typedef struct {
-    uint8_t                 *prepare_buf;
-    int                     prepare_len;
+    uint8_t *prepare_buf;
+    int prepare_len;
 } prepare_type_env_t;
 
 prepare_type_env_t prepare_write_env = {};
 
+static void report_throughput(void) {
+    int64_t now = esp_timer_get_time();
+    if (last_report_time == 0) {
+        last_report_time = now;
+        return;
+    }
+    
+    int64_t elapsed_us = now - last_report_time;
+    if (elapsed_us >= 1000000) {  // Report every second
+        float throughput_kbps = (bytes_received * 8.0f) / (elapsed_us / 1000.0f);
+        ESP_LOGI(TAG, "Throughput: %.2f kbps (%.2f KB/s), MTU: %d", 
+                 throughput_kbps, bytes_received / 1024.0f, current_mtu);
+        bytes_received = 0;
+        last_report_time = now;
+    }
+}
+
 static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if, 
                                 esp_ble_gatts_cb_param_t *param) {
-    ESP_LOGI(TAG, "gatts_event_handler %d %d %p", event, gatts_if, param);
     switch (event) {
         case ESP_GATTS_REG_EVT:
             ESP_LOGI(TAG, "GATTS Register, app_id: %d, status: %d", 
@@ -163,90 +185,69 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
         case ESP_GATTS_CONNECT_EVT:
             ESP_LOGI(TAG, "Client connected, conn_id: %d", param->connect.conn_id);
             conn_id = param->connect.conn_id;
+            bytes_received = 0;
+            last_report_time = 0;
             
-            // Request MTU exchange to maximum size
+            // Request maximum MTU immediately
             esp_ble_gatt_set_local_mtu(PREFERRED_MTU);
             
-            // Optionally update connection parameters for better throughput
+            // Request aggressive connection parameters for maximum throughput
             esp_ble_conn_update_params_t conn_params = {0};
             memcpy(conn_params.bda, param->connect.remote_bda, sizeof(esp_bd_addr_t));
-            conn_params.min_int = 0x06;  // 7.5ms
-            conn_params.max_int = 0x06;  // 7.5ms
-            conn_params.latency = 0;
-            conn_params.timeout = 400;   // 4 seconds
+            
+            // Connection interval: 7.5ms (minimum allowed by BLE spec for data transfer)
+            conn_params.min_int = 0x06;  // 6 * 1.25ms = 7.5ms
+            conn_params.max_int = 0x06;  // Keep it fixed for consistent performance
+            conn_params.latency = 0;     // No slave latency - respond to every event
+            conn_params.timeout = 400;   // 4 seconds supervision timeout
+            
             esp_ble_gap_update_conn_params(&conn_params);
+            
+            ESP_LOGI(TAG, "Requesting connection interval: 7.5ms, latency: 0");
             break;
             
         case ESP_GATTS_DISCONNECT_EVT:
             ESP_LOGI(TAG, "Client disconnected, reason: 0x%x", param->disconnect.reason);
-            current_mtu = 23; // Reset to default
+            current_mtu = 23;
+            bytes_received = 0;
+            last_report_time = 0;
             esp_ble_gap_start_advertising(&adv_params);
             break;
             
         case ESP_GATTS_MTU_EVT:
             current_mtu = param->mtu.mtu;
-            ESP_LOGI(TAG, "MTU Exchange: %d bytes", current_mtu);
+            ESP_LOGI(TAG, "MTU Exchange complete: %d bytes (payload: %d bytes)", 
+                     current_mtu, current_mtu - 3);
             break;
             
         case ESP_GATTS_WRITE_EVT:
-            if (!param->write.is_prep){
-                ESP_LOGI(TAG, "accepting %u bytes, no prep ", param->write.len);
-                // ESP_LOG_BUFFER_HEX(TAG, param->write.value, param->write.len);
-#if 0
-                if (gl_profile_tab[PROFILE_B_APP_ID].descr_handle == param->write.handle && param->write.len == 2*/){
-                    uint16_t descr_value= param->write.value[1]<<8 | param->write.value[0];
-                    if (descr_value == 0x0001){
-                        if (b_property & ESP_GATT_CHAR_PROP_BIT_NOTIFY) {
-                            ESP_LOGI(TAG, "Notification enable");
-                            uint8_t notify_data[15];
-                            for (int i = 0; i < sizeof(notify_data); ++i)
-                            {
-                                notify_data[i] = i%0xff;
-                            }
-                            //the size of notify_data[] need less than MTU size
-                            esp_ble_gatts_send_indicate(gatts_if, param->write.conn_id, gl_profile_tab[PROFILE_B_APP_ID].char_handle,
-                                                    sizeof(notify_data), notify_data, false);
-                        }
-                    }else if (descr_value == 0x0002){
-                        if (b_property & ESP_GATT_CHAR_PROP_BIT_INDICATE){
-                            ESP_LOGI(TAG, "Indication enable");
-                            uint8_t indicate_data[15];
-                            for (int i = 0; i < sizeof(indicate_data); ++i)
-                            {
-                                indicate_data[i] = i%0xff;
-                            }
-                            //the size of indicate_data[] need less than MTU size
-                            esp_ble_gatts_send_indicate(gatts_if, param->write.conn_id, gl_profile_tab[PROFILE_B_APP_ID].char_handle,
-                                                    sizeof(indicate_data), indicate_data, true);
-                        }
-                    }
-                    else if (descr_value == 0x0000){
-                        ESP_LOGI(GATTS_TAG, "Notification/Indication disable");
-                    }else{
-                        ESP_LOGE(GATTS_TAG, "Unknown value");
-                    }
-                }
-#endif
+            if (!param->write.is_prep) {
+                // Regular write - count bytes for throughput
+                bytes_received += param->write.len;
+                report_throughput();
             }
+            
             esp_gatt_status_t status = ESP_GATT_OK;
-            ESP_LOGI(TAG, "ESP_GATTS_WRITE_EVT need_rsp: %d, is_prep: %d", param->write.need_rsp, param->write.is_prep);
-            if (param->write.need_rsp){
+            
+            if (param->write.need_rsp) {
                 if (param->write.is_prep) {
+                    // Prepare write handling
                     if (param->write.offset > PREPARE_BUF_MAX_SIZE) {
                         status = ESP_GATT_INVALID_OFFSET;
                     } else if ((param->write.offset + param->write.len) > PREPARE_BUF_MAX_SIZE) {
                         status = ESP_GATT_INVALID_ATTR_LEN;
                     }
+                    
                     if (status == ESP_GATT_OK && prepare_write_env.prepare_buf == NULL) {
-                        prepare_write_env.prepare_buf = (uint8_t *)malloc(PREPARE_BUF_MAX_SIZE*sizeof(uint8_t));
+                        prepare_write_env.prepare_buf = (uint8_t *)malloc(PREPARE_BUF_MAX_SIZE);
                         prepare_write_env.prepare_len = 0;
                         if (prepare_write_env.prepare_buf == NULL) {
-                            ESP_LOGE(TAG, "Gatt_server prep no mem");
+                            ESP_LOGE(TAG, "Prep buffer allocation failed");
                             status = ESP_GATT_NO_RESOURCES;
                         }
                     }
-
-                    // Security fix: Use calloc to ensure memory is zero-initialized
+                    
+                    // Send response quickly to minimize round-trip time
                     esp_gatt_rsp_t *gatt_rsp = (esp_gatt_rsp_t *)calloc(1, sizeof(esp_gatt_rsp_t));
                     if (gatt_rsp) {
                         gatt_rsp->attr_value.len = param->write.len;
@@ -254,44 +255,54 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
                         gatt_rsp->attr_value.offset = param->write.offset;
                         gatt_rsp->attr_value.auth_req = ESP_GATT_AUTH_REQ_NONE;
                         memcpy(gatt_rsp->attr_value.value, param->write.value, param->write.len);
-                        esp_err_t response_err = esp_ble_gatts_send_response(gatts_if, param->write.conn_id, param->write.trans_id, status, gatt_rsp);
-                        if (response_err != ESP_OK){
-                            ESP_LOGE(TAG, "Send response error\n");
+                        
+                        esp_err_t response_err = esp_ble_gatts_send_response(gatts_if, 
+                            param->write.conn_id, param->write.trans_id, status, gatt_rsp);
+                        
+                        if (response_err != ESP_OK) {
+                            ESP_LOGE(TAG, "Send response error: %x", response_err);
                         }
                         free(gatt_rsp);
                     } else {
-                        ESP_LOGE(TAG, "malloc failed, no resource to send response error\n");
+                        ESP_LOGE(TAG, "Response allocation failed");
                         status = ESP_GATT_NO_RESOURCES;
                     }
-                    if (status != ESP_GATT_OK){
-                        ESP_LOGW(TAG, "error %d", status);
+                    
+                    if (status != ESP_GATT_OK) {
                         return;
                     }
+                    
+                    // Copy data to prepare buffer
                     memcpy(prepare_write_env.prepare_buf + param->write.offset,
-                        param->write.value,
-                        param->write.len);
+                           param->write.value, param->write.len);
                     prepare_write_env.prepare_len += param->write.len;
-
-                }else{
-                    esp_ble_gatts_send_response(gatts_if, param->write.conn_id, param->write.trans_id, status, NULL);
+                    
+                } else {
+                    // Regular write with response
+                    esp_ble_gatts_send_response(gatts_if, param->write.conn_id, 
+                                                param->write.trans_id, status, NULL);
                 }
             }
             break;
 
         case ESP_GATTS_EXEC_WRITE_EVT:
-            ESP_LOGI(TAG, "ESP_GATTS_EXEC_WRITE_EVT");
-            if (param->exec_write.exec_write_flag == ESP_GATT_PREP_WRITE_EXEC){
-                // ESP_LOG_BUFFER_HEX(TAG, prepare_write_env.prepare_buf, prepare_write_env.prepare_len);
-                ESP_LOGI(TAG, "accepting %u bytes of data", prepare_write_env.prepare_len);
-            } else{
-                ESP_LOGI(TAG,"ESP_GATT_PREP_WRITE_CANCEL");
+            if (param->exec_write.exec_write_flag == ESP_GATT_PREP_WRITE_EXEC) {
+                ESP_LOGI(TAG, "Long write complete: %u bytes", prepare_write_env.prepare_len);
+                bytes_received += prepare_write_env.prepare_len;
+                report_throughput();
+            } else {
+                ESP_LOGI(TAG, "Long write cancelled");
             }
+            
             if (prepare_write_env.prepare_buf) {
                 free(prepare_write_env.prepare_buf);
                 prepare_write_env.prepare_buf = NULL;
             }
             prepare_write_env.prepare_len = 0;
-
+            
+            // Send response
+            esp_ble_gatts_send_response(gatts_if, param->exec_write.conn_id, 
+                                       param->exec_write.trans_id, ESP_GATT_OK, NULL);
             break;
             
         default:
@@ -300,30 +311,20 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
 }
 
 static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) {
-    ESP_LOGI(TAG, "GAP event: %d", event);
-    
     switch (event) {
         case ESP_GAP_BLE_ADV_DATA_SET_COMPLETE_EVT:
-            ESP_LOGI(TAG, "ADV_DATA_SET_COMPLETE, status: %d", param->adv_data_cmpl.status);
             adv_config_done &= (~ADV_CONFIG_FLAG);
             if (adv_config_done == 0) {
                 ESP_LOGI(TAG, "Starting advertising...");
-                esp_err_t ret = esp_ble_gap_start_advertising(&adv_params);
-                if (ret) {
-                    ESP_LOGE(TAG, "Start advertising failed: %x", ret);
-                }
+                esp_ble_gap_start_advertising(&adv_params);
             }
             break;
             
         case ESP_GAP_BLE_SCAN_RSP_DATA_SET_COMPLETE_EVT:
-            ESP_LOGI(TAG, "SCAN_RSP_DATA_SET_COMPLETE, status: %d", param->scan_rsp_data_cmpl.status);
             adv_config_done &= (~SCAN_RSP_CONFIG_FLAG);
             if (adv_config_done == 0) {
                 ESP_LOGI(TAG, "Starting advertising...");
-                esp_err_t ret = esp_ble_gap_start_advertising(&adv_params);
-                if (ret) {
-                    ESP_LOGE(TAG, "Start advertising failed: %x", ret);
-                }
+                esp_ble_gap_start_advertising(&adv_params);
             }
             break;
             
@@ -336,18 +337,18 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
             break;
             
         case ESP_GAP_BLE_UPDATE_CONN_PARAMS_EVT:
-            ESP_LOGI(TAG, "Connection params updated: status=%d, min_int=%d, max_int=%d, latency=%d, timeout=%d",
+            ESP_LOGI(TAG, "Connection params updated: status=%d, interval=%.2fms, latency=%d, timeout=%dms",
                      param->update_conn_params.status,
-                     param->update_conn_params.min_int,
-                     param->update_conn_params.max_int,
+                     param->update_conn_params.min_int * 1.25,
                      param->update_conn_params.latency,
-                     param->update_conn_params.timeout);
+                     param->update_conn_params.timeout * 10);
             break;
             
         default:
             break;
     }
 }
+
 extern void waveshare_init(void);
 
 void app_main(void) {
@@ -355,7 +356,6 @@ void app_main(void) {
 
     waveshare_init();
     
-    // Initialize NVS
     ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -363,8 +363,9 @@ void app_main(void) {
     }
     ESP_ERROR_CHECK(ret);
     
-    // Initialize Bluetooth controller
+    // Initialize Bluetooth controller with default settings
     esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
+    
     ret = esp_bt_controller_init(&bt_cfg);
     if (ret) {
         ESP_LOGE(TAG, "Bluetooth controller init failed: %s", esp_err_to_name(ret));
@@ -377,7 +378,6 @@ void app_main(void) {
         return;
     }
     
-    // Initialize Bluedroid stack
     ret = esp_bluedroid_init();
     if (ret) {
         ESP_LOGE(TAG, "Bluedroid init failed: %s", esp_err_to_name(ret));
@@ -390,17 +390,16 @@ void app_main(void) {
         return;
     }
     
-    // Set maximum MTU
+    // Set maximum MTU early
     esp_ble_gatt_set_local_mtu(PREFERRED_MTU);
     
-    // Register callbacks
     esp_ble_gatts_register_callback(gatts_event_handler);
     esp_ble_gap_register_callback(gap_event_handler);
     
-    // Register application
     esp_ble_gatts_app_register(0);
     
-    ESP_LOGI(TAG, "BLE Maximum MTU receiver initialized");
-    ESP_LOGI(TAG, "Device name: %s", DEVICE_NAME);
-    ESP_LOGI(TAG, "Maximum MTU: %d bytes", MAX_MTU_SIZE);
+    ESP_LOGI(TAG, "BLE High-Throughput Receiver initialized");
+    ESP_LOGI(TAG, "Device: %s | Max MTU: %d | Payload: %d bytes", 
+             DEVICE_NAME, PREFERRED_MTU, PREFERRED_MTU - 3);
+    ESP_LOGI(TAG, "Target connection interval: 7.5ms");
 }
