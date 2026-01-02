@@ -4,7 +4,7 @@
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_rgb.h"
 #include "esp_log.h"
-#include "esp_h264_dec_sw.h"
+#include "video.h"
 
 #define I2C_MASTER_NUM (0)
 #define I2C_MASTER_TIMEOUT_MS (1000)
@@ -38,6 +38,7 @@ esp_err_t waveshare_rgb_lcd_bl_off()
     return i2c_master_write_to_device(I2C_MASTER_NUM, 0x38, &write_buf, 1, I2C_MASTER_TIMEOUT_MS / portTICK_PERIOD_MS);
 }
 
+esp_lcd_panel_handle_t panel_handle = NULL;
 
 void waveshare_init(void) {
     gpio_config_t io_conf = {};
@@ -65,7 +66,6 @@ void waveshare_init(void) {
     // Install I2C driver
     ESP_ERROR_CHECK(i2c_driver_install(I2C_MASTER_NUM, i2c_conf.mode, 0, 0, 0));
 
-    esp_lcd_panel_handle_t panel_handle = NULL;
     esp_lcd_rgb_panel_config_t panel_config = {
         .clk_src = LCD_CLK_SRC_DEFAULT, // Set the clock source for the panel
         .timings =  {
@@ -124,12 +124,5 @@ void waveshare_init(void) {
     ESP_ERROR_CHECK_WITHOUT_ABORT(esp_lcd_panel_draw_bitmap(panel_handle, 32, 32, 48, 48, pixels));
 
     waveshare_rgb_lcd_bl_on();
-
-    esp_h264_dec_cfg_sw_t h264_config = {
-        .pic_type = ESP_H264_RAW_FMT_I420
-    };
-    esp_h264_dec_handle_t h264_handle = NULL;
-    ESP_ERROR_CHECK(esp_h264_dec_sw_new(&h264_config, &h264_handle));
-    ESP_ERROR_CHECK(esp_h264_dec_open(h264_handle));
-
+    video_init();
 }

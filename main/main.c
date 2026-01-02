@@ -8,6 +8,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "nvs_flash.h"
+#include "video.h"
 
 #define TAG "MAIN"
 #define DEVICE_NAME "Motocast"
@@ -23,7 +24,7 @@ static uint8_t adv_config_done = 0;
 #define ADV_CONFIG_FLAG (1 << 0)
 #define SCAN_RSP_CONFIG_FLAG (1 << 1)
 
-#define PREPARE_BUF_MAX_SIZE (4096)  // Increased buffer size
+#define PREPARE_BUF_MAX_SIZE (1024)
 
 static uint16_t gatts_if_id = 0;
 static uint16_t conn_id = 0;
@@ -225,6 +226,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
                 // Regular write - count bytes for throughput
                 bytes_received += param->write.len;
                 report_throughput();
+                video_decode(param->write.value, param->write.len);
             }
             
             esp_gatt_status_t status = ESP_GATT_OK;
@@ -290,6 +292,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
                 ESP_LOGI(TAG, "Long write complete: %u bytes", prepare_write_env.prepare_len);
                 bytes_received += prepare_write_env.prepare_len;
                 report_throughput();
+                video_decode(prepare_write_env.prepare_buf, prepare_write_env.prepare_len);
             } else {
                 ESP_LOGI(TAG, "Long write cancelled");
             }
