@@ -118,10 +118,6 @@ void waveshare_init(void) {
     ESP_ERROR_CHECK(esp_lcd_new_rgb_panel(&panel_config, &panel_handle));
     ESP_LOGI(TAG, "Initialize RGB LCD panel"); // Log the initialization of the RGB LCD panel
     ESP_ERROR_CHECK(esp_lcd_panel_init(panel_handle)); // Initialize the LCD panel
-    uint16_t * pixels = malloc(16 * 16 * 2);
-    for(uint16_t i = 0; i != 16 * 16; ++i)
-        pixels[i] = 0xF100;
-    ESP_ERROR_CHECK_WITHOUT_ABORT(esp_lcd_panel_draw_bitmap(panel_handle, 32, 32, 48, 48, pixels));
 
     waveshare_rgb_lcd_bl_on();
     video_init();

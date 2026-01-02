@@ -13,16 +13,52 @@ esp_h264_dec_cfg_sw_t h264_config = {
 };
 static esp_h264_dec_handle_t h264_handle = NULL;
 
+static uint16_t *fb_rgb;
+
+static const unsigned W = 320, H = 240;
+
 void video_init() {
     ESP_LOGI(TAG, "initialising video decoder...");
     ESP_ERROR_CHECK(esp_h264_dec_sw_new(&h264_config, &h264_handle));
     ESP_ERROR_CHECK(esp_h264_dec_open(h264_handle));
     ESP_LOGI(TAG, "initialised video decoder.");
+    fb_rgb = (uint16_t*)malloc(W * H * 2);
+    if (!fb_rgb) {
+        ESP_LOGE(TAG, "no memory for RGB framebuffer");
+        abort();
+    }
 }
 
 struct video_packet pkt = {};
 
 esp_h264_dec_out_frame_t out_frame = {};
+
+void video_present_frame(const uint8_t *yuv420) {
+    static const unsigned W2 = W / 2, H2 = H / 2;
+    static const unsigned LSIZE = W * H;
+    static const unsigned CSIZE = W2 * H2;
+    const uint8_t * Y = yuv420;
+    const uint8_t * U = Y + LSIZE;
+    const uint8_t * V = U + CSIZE;
+    uint16_t *dst = fb_rgb;
+    for(unsigned i = 0; i != H; ++i) {
+        for(unsigned j = 0; j != W; ++j) {
+            int16_t t_y = Y[((i * W) + j)];
+            int16_t t_u = U[(((i / 2) * W2) + (j / 2))] - 128;
+            int16_t t_v = V[(((i / 2) * W2) + (j / 2))] - 128;
+            t_y = t_y < 16 ? 0 : t_y - 16;
+
+            int16_t r = (298 * t_y + 409 * t_v + 128) >> 8;
+            int16_t g = (298 * t_y - 100 * t_u - 208 * t_v + 128) >> 8;
+            int16_t b = (298 * t_y + 516 * t_u + 128) >> 8;
+            r >>= 3;
+            g >>= 2;
+            b >>= 3;
+            *dst++ = (r << 11) | (g << 5) | b;
+        }
+    }
+    ESP_ERROR_CHECK_WITHOUT_ABORT(esp_lcd_panel_draw_bitmap(panel_handle, 0, 0, W, H, fb_rgb));
+}
 
 void video_packet_free(struct video_packet *pkt) {
     free(pkt->data);
@@ -54,6 +90,8 @@ esp_h264_err_t video_decode(uint8_t *buffer, uint32_t buffer_len) {
                 ESP_LOGI(TAG, "esp_h264_dec_process error: %d", ret);
             } else {
                 ESP_LOGI(TAG, "out frame: %p %u", out_frame.outbuf, out_frame.out_size);
+                if (out_frame.outbuf)
+                    video_present_frame(out_frame.outbuf);
             }
             in_frame.raw_data.buffer += in_frame.consume;
             in_frame.raw_data.len -= in_frame.consume;
