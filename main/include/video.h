@@ -2,6 +2,7 @@
 
 struct video_packet {
     uint8_t * data;
+    uint8_t header_read;
     uint32_t data_len;
     uint32_t data_written;
 };

@@ -28,6 +28,7 @@ void video_packet_free(struct video_packet *pkt) {
     free(pkt->data);
     pkt->data = 0;
     pkt->data_len = pkt->data_written = 0;
+    pkt->header_read = 0;
 }
 
 int video_packet_finished(struct video_packet *pkt) {
@@ -66,16 +67,14 @@ esp_h264_err_t video_decode(uint8_t *buffer, uint32_t buffer_len) {
 uint32_t video_packet_process(struct video_packet *pkt, const uint8_t *buffer, uint32_t buffer_len) {
     uint32_t src_offset = 0;
     if (!pkt->data) {
-        if (buffer_len < 4) {
-            ESP_LOGE(TAG, "short buffer");
-            abort();
+        while(pkt->header_read < 4 && src_offset < buffer_len) {
+            pkt->data_len  |=  (uint32_t)buffer[pkt->header_read] << (pkt->header_read * 8);
+            ++pkt->header_read;
+            ++src_offset;
         }
-        pkt->data_len  =  (uint32_t)buffer[0] << 0;
-        pkt->data_len |= (uint32_t)buffer[1] << 8;
-        pkt->data_len |= (uint32_t)buffer[2] << 16;
-        pkt->data_len |= (uint32_t)buffer[3] << 24;
+        if (pkt->header_read < 4)
+            return src_offset;
         pkt->data_written = 0;
-        src_offset = 4;
         ESP_LOGI(TAG, "video_packet_process, new packet, data len: %u", pkt->data_len);
         pkt->data = (uint8_t*)malloc(pkt->data_len);
         if (!pkt->data) {
