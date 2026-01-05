@@ -197,6 +197,27 @@ void esp_bt_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param)
                  bda2str(param->mode_chg.bda, bda_str, sizeof(bda_str)));
         break;
 
+    case ESP_BT_GAP_CONFIG_EIR_DATA_EVT:
+        ESP_LOGI(SPP_TAG, "ESP_BT_GAP_CONFIG_EIR_DATA_EVT", param->config_eir_data);
+        for(uint8_t t = 0; t != param->config_eir_data.eir_type_num; ++t)
+            ESP_LOGI(SPP_TAG, "EIR type: %02x", param->config_eir_data.eir_type[t]);
+        break;
+
+    case ESP_BT_GAP_ACL_CONN_CMPL_STAT_EVT:
+        ESP_LOGI(SPP_TAG, "ESP_BT_GAP_ACL_CONN_CMPL_STAT_EVT to %s", bda2str(param->acl_conn_cmpl_stat.bda, bda_str, sizeof(bda_str)));
+        break;
+    case ESP_BT_GAP_ACL_DISCONN_CMPL_STAT_EVT:
+        ESP_LOGI(SPP_TAG, "ESP_BT_GAP_ACL_DISCONN_CMPL_STAT_EVT to %s", bda2str(param->acl_disconn_cmpl_stat.bda, bda_str, sizeof(bda_str)));
+        break;
+
+    case ESP_BT_GAP_ENC_CHG_EVT: {
+        char *str_enc[3] = {"OFF", "E0", "AES"};
+        ESP_LOGI(SPP_TAG, "ESP_BT_GAP_ENC_CHG_EVT: Encryption mode to %s changed to %s",
+                 bda2str(param->enc_chg.bda, bda_str, sizeof(bda_str)), str_enc[param->enc_chg.enc_mode]);
+        break;
+    }
+
+
     default: {
         ESP_LOGI(SPP_TAG, "event: %d", event);
         break;
