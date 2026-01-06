@@ -49,20 +49,21 @@ esp_lcd_panel_handle_t panel_handle = NULL;
 #define WIDTH (240)
 #define HEIGHT (320)
 #define BUFFER_LINES (10)
-#define BUFFER_SIZE (BUFFER_LINES * WIDTH)
+#define BUFFER_SIZE (2 * BUFFER_LINES * WIDTH)
 
-uint16_t buffer[BUFFER_SIZE];
+uint8_t buffer[BUFFER_SIZE];
 uint buffer_offset = 0;
 int buffer_y = 0;
 
 uint8_t record[3] = {};
 uint record_offset = 0;
 
-void unpack_rle(uint16_t color, uint num) {
+void unpack_rle(uint8_t b0, uint8_t b1, uint16_t num) {
     if (num == 0)
         num = 256;
     while(num--) {
-        buffer[buffer_offset++] = color;
+        buffer[buffer_offset++] = b0;
+        buffer[buffer_offset++] = b1;
         if (buffer_offset == BUFFER_SIZE) {
             ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(panel_handle, 0, buffer_y, 240, buffer_y + BUFFER_LINES, buffer));
             buffer_offset = 0;
@@ -79,7 +80,7 @@ void display_data(const uint8_t *data, size_t data_size) {
     for(size_t i = 0; i != data_size; ++i) {
         record[record_offset++] = *src++;
         if (record_offset == 3) {
-            unpack_rle(record[0] | ((uint16_t)record[1] << 8), record[2]);
+            unpack_rle(record[0], record[1], record[2]);
             record_offset = 0;
         }
     }
@@ -287,22 +288,22 @@ void app_main(void)
 
     ESP_LOGI(SPP_TAG, "Initialize SPI bus");
     spi_bus_config_t buscfg = {
-        .mosi_io_num = 13,
-        .miso_io_num = 12,
-        .sclk_io_num = 14,
-        .quadwp_io_num = -1,
-        .quadhd_io_num = -1,
-        .max_transfer_sz = 320 * 240 / 4 * 2,
+        .mosi_io_num = GPIO_NUM_13,
+        .miso_io_num = GPIO_NUM_12,
+        .sclk_io_num = GPIO_NUM_14,
+        .quadwp_io_num = GPIO_NUM_NC,
+        .quadhd_io_num = GPIO_NUM_NC,
+        .max_transfer_sz = 320 * 240 * 2,
     };
     ESP_ERROR_CHECK(spi_bus_initialize(SPI2_HOST, &buscfg, SPI_DMA_CH_AUTO));
 
     ESP_LOGI(SPP_TAG, "Install panel IO");
     esp_lcd_panel_io_handle_t io_handle = NULL;
     esp_lcd_panel_io_spi_config_t io_config = {
-        .cs_gpio_num = 15,
-        .dc_gpio_num = 2,
+        .cs_gpio_num = GPIO_NUM_15,
+        .dc_gpio_num = GPIO_NUM_2,
         .spi_mode = 0,
-        .pclk_hz = 24000000,
+        .pclk_hz = 40000000,
         .trans_queue_depth = 10,
         .lcd_cmd_bits = 8,
         .lcd_param_bits = 8,
@@ -313,18 +314,32 @@ void app_main(void)
     esp_lcd_panel_dev_config_t panel_config = {
         .reset_gpio_num = GPIO_NUM_NC,
         .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_BGR,
-        .data_endian = LCD_RGB_DATA_ENDIAN_BIG,
         .bits_per_pixel = 16,
     };
-    ESP_LOGI(SPP_TAG, "Install ILI9341 panel driver");
-    ESP_ERROR_CHECK(esp_lcd_new_panel_ili9341(io_handle, &panel_config, &panel_handle));
+    ESP_ERROR_CHECK(esp_lcd_new_panel_st7789(io_handle, &panel_config, &panel_handle));
     ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_handle));
     ESP_ERROR_CHECK(esp_lcd_panel_init(panel_handle));
-    ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel_handle, true, true));
-    ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(panel_handle, true));
+    ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel_handle, false, false));
+    ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(panel_handle, false));
 
     // user can flush pre-defined pattern to the screen before we turn on the screen or backlight
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
+#if 0
+    uint8_t line[240 * 2] = {};
+    for(int i = 0; i != 480; ) {
+        // line[i++] = 0xf8; //B
+        // line[i++] = 0x00;
+        // line[i++] = 0x00; //R
+        // line[i++] = 0x1f;
+        // line[i++] = 0x07; //G
+        // line[i++] = 0xe0;
+        line[i++] = 0xf8; //B
+        line[i++] = 0x1f; //R
+    }
+    for(int i = 0; i != 320; ++i) {
+        ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(panel_handle, 0, i, 240, i + 1, line));
+    }
+#endif
 
     ESP_LOGI(SPP_TAG, "Turn on LCD backlight");
     gpio_set_level(GPIO_NUM_27, 1);
