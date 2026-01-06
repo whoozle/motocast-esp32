@@ -303,7 +303,7 @@ void app_main(void)
         .cs_gpio_num = GPIO_NUM_15,
         .dc_gpio_num = GPIO_NUM_2,
         .spi_mode = 0,
-        .pclk_hz = 40000000,
+        .pclk_hz = 80000000,
         .trans_queue_depth = 10,
         .lcd_cmd_bits = 8,
         .lcd_param_bits = 8,
