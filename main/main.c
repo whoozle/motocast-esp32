@@ -44,6 +44,47 @@ static long data_num = 0;
 static const esp_spp_sec_t sec_mask = ESP_SPP_SEC_AUTHENTICATE;
 static const esp_spp_role_t role_slave = ESP_SPP_ROLE_SLAVE;
 
+esp_lcd_panel_handle_t panel_handle = NULL;
+
+#define WIDTH (240)
+#define HEIGHT (320)
+#define BUFFER_LINES (10)
+#define BUFFER_SIZE (BUFFER_LINES * WIDTH)
+
+uint16_t buffer[BUFFER_SIZE];
+uint buffer_offset = 0;
+int buffer_y = 0;
+
+uint8_t record[3] = {};
+uint record_offset = 0;
+
+void unpack_rle(uint16_t color, uint num) {
+    if (num == 0)
+        num = 256;
+    while(num--) {
+        buffer[buffer_offset++] = color;
+        if (buffer_offset == BUFFER_SIZE) {
+            ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(panel_handle, 0, buffer_y, 240, buffer_y + BUFFER_LINES, buffer));
+            buffer_offset = 0;
+            buffer_y += BUFFER_LINES;
+            if (buffer_y == 320) {
+                buffer_y = 0;
+            }
+        }
+    }
+}
+
+void display_data(const uint8_t *data, size_t data_size) {
+    const uint8_t *src = data;
+    for(size_t i = 0; i != data_size; ++i) {
+        record[record_offset++] = *src++;
+        if (record_offset == 3) {
+            unpack_rle(record[0] | ((uint16_t)record[1] << 8), record[2]);
+            record_offset = 0;
+        }
+    }
+}
+
 static char *bda2str(uint8_t * bda, char *str, size_t size)
 {
     if (bda == NULL || str == NULL || size < 18) {
@@ -105,6 +146,7 @@ static void esp_spp_cb(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
         ESP_LOGI(SPP_TAG, "ESP_SPP_CL_INIT_EVT");
         break;
     case ESP_SPP_DATA_IND_EVT:
+        display_data(param->data_ind.data, param->data_ind.len);
 #if (SPP_SHOW_MODE == SPP_SHOW_DATA)
         /*
          * We only show the data in which the data length is less than 128 here. If you want to print the data and
@@ -268,17 +310,18 @@ void app_main(void)
     // Attach the LCD to the SPI bus
     ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi(SPI2_HOST, &io_config, &io_handle));
 
-    esp_lcd_panel_handle_t panel_handle = NULL;
     esp_lcd_panel_dev_config_t panel_config = {
         .reset_gpio_num = GPIO_NUM_NC,
         .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_BGR,
+        .data_endian = LCD_RGB_DATA_ENDIAN_BIG,
         .bits_per_pixel = 16,
     };
     ESP_LOGI(SPP_TAG, "Install ILI9341 panel driver");
     ESP_ERROR_CHECK(esp_lcd_new_panel_ili9341(io_handle, &panel_config, &panel_handle));
     ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_handle));
     ESP_ERROR_CHECK(esp_lcd_panel_init(panel_handle));
-    ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel_handle, true, false));
+    ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel_handle, true, true));
+    ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(panel_handle, true));
 
     // user can flush pre-defined pattern to the screen before we turn on the screen or backlight
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
